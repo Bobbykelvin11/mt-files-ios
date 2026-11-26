@@ -106,7 +106,7 @@ final class LocationStore: ObservableObject {
         external = ext
         var favs: [Place] = []
         for (i, b) in storedFavorites.enumerated() {
-            guard let r = resolve(b, startAccess: false) else { continue }
+            guard let r = resolve(b, startAccess: true) else { continue }
             let url = r.0, refreshed = r.1
             if let refreshed { storedFavorites[i].data = refreshed }
             favs.append(Place(id: b.id, name: b.name, symbol: "star.fill", url: url, removable: true))
@@ -154,6 +154,16 @@ final class LocationStore: ObservableObject {
             storedFavorites.append(b)
             favorites.append(Place(id: b.id, name: b.name, symbol: "star.fill", url: url, removable: true))
         }
+        persist()
+    }
+
+    /// Remembers a file opened in place (security-scoped) as a favorite so it reopens later.
+    func addOpenedFile(_ url: URL) {
+        guard !isFavorite(url) else { return }
+        guard let data = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) else { return }
+        let b = StoredBookmark(id: UUID().uuidString, name: url.lastPathComponent, data: data)
+        storedFavorites.append(b)
+        favorites.append(Place(id: b.id, name: b.name, symbol: "star.fill", url: url, removable: true))
         persist()
     }
 

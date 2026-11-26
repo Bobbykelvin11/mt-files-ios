@@ -46,6 +46,8 @@ struct RootView: View {
     @EnvironmentObject var store: LibraryStore
     @EnvironmentObject var places: LocationStore
     @State private var showIPALibrary = false
+    @State private var showURLPrompt = false
+    @State private var urlText = ""
 
     var body: some View {
         TabView(selection: $app.tab) {
@@ -83,6 +85,17 @@ struct RootView: View {
         } message: {
             Text(app.error ?? store.lastError ?? "")
         }
+        .documentPicker($app.pick)
+        .alert("Download from URL", isPresented: $showURLPrompt) {
+            TextField("https://example.com/file.zip", text: $urlText)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Download") { app.download(urlText) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Saved into the current pane's folder.")
+        }
         .fullScreenCover(item: $app.open) { req in
             ViewerHost(request: req)
                 .environmentObject(app)
@@ -105,6 +118,21 @@ struct RootView: View {
                             .accessibilityLabel("Copy selected to other pane")
                         Button { app.transfer(from: app.active, move: true) } label: { Image(systemName: "arrow.right.doc.on.clipboard") }
                             .accessibilityLabel("Move selected to other pane")
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Menu {
+                            Button { app.importFiles(into: app.activePane) } label: { Label("Import Files (copy)…", systemImage: "square.and.arrow.down") }
+                            Button { app.openInPlace(places: places, pane: app.activePane) } label: { Label("Open Files in Place…", systemImage: "doc.viewfinder") }
+                            Button { app.openFolder(places: places, pane: app.activePane) } label: { Label("Open Folder…", systemImage: "folder.badge.plus") }
+                            Button {
+                                let clip = UIPasteboard.general.hasURLs ? (UIPasteboard.general.url?.absoluteString ?? "") : ""
+                                urlText = clip.hasPrefix("http") ? clip : ""
+                                showURLPrompt = true
+                            } label: { Label("From URL…", systemImage: "link") }
+                        } label: {
+                            Image(systemName: "plus.circle.fill").font(.title3)
+                        }
+                        .accessibilityLabel("Import")
                     }
                     ToolbarItem(placement: .navigationBarLeading) {
                         Button { app.left.go(app.right.dir); } label: { Image(systemName: "arrow.left.arrow.right") }
