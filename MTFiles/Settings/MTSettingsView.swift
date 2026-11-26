@@ -10,6 +10,10 @@ struct MTSettingsView: View {
     @State private var githubToken = Keychain.get("github_token")
     @State private var testResult: String?
     @State private var testing = false
+    @AppStorage("ai_no_key") private var noKey = false
+    @State private var models: [String] = []
+    @State private var loadingModels = false
+    @State private var modelsError: String?
     @EnvironmentObject var store: LibraryStore
     @EnvironmentObject var places: LocationStore
 
@@ -17,15 +21,42 @@ struct MTSettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    HStack {
-                        preset("Groq", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile")
-                        preset("OpenRouter", "https://openrouter.ai/api/v1", "meta-llama/llama-3.3-70b-instruct:free")
-                        preset("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini")
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack {
+                            preset("Groq", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile")
+                            preset("OpenRouter", "https://openrouter.ai/api/v1", "meta-llama/llama-3.3-70b-instruct:free")
+                            preset("Uncensored", "https://openrouter.ai/api/v1", "cognitivecomputations/dolphin-mistral-24b-venice-edition")
+                            preset("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini")
+                            preset("LM Studio", "http://192.168.1.2:1234/v1", "local-model", local: true)
+                            preset("Ollama", "http://192.168.1.2:11434/v1", "llama3.2", local: true)
+                        }
                     }
                     TextField("Base URL", text: $baseURL)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("Model", text: $model)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    HStack {
+                        Button {
+                            loadingModels = true
+                            modelsError = nil
+                            Task {
+                                do { models = try await AIClient.listModels() } catch { modelsError = error.localizedDescription }
+                                loadingModels = false
+                            }
+                        } label: { HStack { Text("Browse models"); if loadingModels { ProgressView() } } }
+                        .disabled(loadingModels)
+                        if !models.isEmpty {
+                            Spacer()
+                            Picker("", selection: $model) {
+                                if !models.contains(model) { Text(model).tag(model) }
+                                ForEach(models, id: \.self) { Text($0).tag($0) }
+                            }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
+                        }
+                    }
+                    if let modelsError { Text(modelsError).font(.caption).foregroundStyle(.red) }
+                    Toggle("No key needed (local server)", isOn: $noKey)
                     SecureField("API key (stored in Keychain)", text: $apiKey)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .onChange(of: apiKey) { Keychain.set($0.trimmingCharacters(in: .whitespacesAndNewlines), for: "ai_api_key") }
@@ -44,12 +75,12 @@ struct MTSettingsView: View {
                     } label: {
                         HStack { Text("Test connection"); if testing { Spacer(); ProgressView() } }
                     }
-                    .disabled(apiKey.isEmpty || testing)
+                    .disabled((apiKey.isEmpty && !noKey) || testing)
                     if let testResult { Text(testResult).font(.caption) }
                 } header: {
                     Text("AI assistant")
                 } footer: {
-                    Text("Any OpenAI-compatible API works (Groq, OpenRouter, OpenAI, LM Studio/Ollama on your network). Free keys: console.groq.com or openrouter.ai. Without a key the assistant still runs file commands offline.")
+                    Text("Pick any provider and any model — including uncensored/abliterated ones on OpenRouter, or your own OpenAI-compatible server (LM Studio, Ollama, llama.cpp, vLLM). For a local server, enter its address (e.g. http://192.168.1.20:1234/v1), turn on “No key needed”, then Browse models. Free keys: console.groq.com, openrouter.ai. Without any provider the assistant still runs file commands offline.")
                 }
 
                 Section("Editor") {
@@ -91,14 +122,16 @@ struct MTSettingsView: View {
         }
     }
 
-    private func preset(_ name: String, _ url: String, _ m: String) -> some View {
+    private func preset(_ name: String, _ url: String, _ m: String, local: Bool = false) -> some View {
         Button(name) {
             baseURL = url
             model = m
+            noKey = local
+            models = []
         }
         .buttonStyle(.bordered)
         .font(.caption)
-        .tint(baseURL == url ? Theme.accent : .gray)
+        .tint(baseURL == url && model == m ? Theme.accent : .gray)
     }
 }
 
