@@ -41,8 +41,6 @@ struct PaneView: View {
     @State private var confirmDelete: URLList?
     @State private var share: URLList?
     @State private var exportItems: URLList?
-    @State private var importerShown = false
-    @State private var importFolder = false
     @State private var deepSearch: DeepSearchRequest?
 
     private var isActive: Bool { app.active == index }
@@ -104,21 +102,6 @@ struct PaneView: View {
                 }
             }
             .preferredColorScheme(.dark)
-        }
-        .fileImporter(isPresented: $importerShown, allowedContentTypes: importFolder ? [.folder] : [.item], allowsMultipleSelection: !importFolder) { result in
-            switch result {
-            case .success(let urls):
-                if importFolder, let url = urls.first {
-                    do {
-                        let place = try places.addExternalFolder(url)
-                        pane.go(place.url)
-                    } catch { app.error = error.localizedDescription }
-                } else {
-                    importFiles(urls)
-                }
-            case .failure(let e):
-                app.error = e.localizedDescription
-            }
         }
     }
 
@@ -194,7 +177,7 @@ struct PaneView: View {
                 }
             }
             Section {
-                Button { importFolder = true; importerShown = true } label: { Label("Add folder from Files…", systemImage: "folder.badge.plus") }
+                Button { app.openFolder(places: places, pane: pane) } label: { Label("Add folder from Files…", systemImage: "folder.badge.plus") }
                 if let r = root, r.removable {
                     Button(role: .destructive) {
                         places.removeExternal(r)
@@ -271,7 +254,9 @@ struct PaneView: View {
                     app.open = OpenRequest(url: u, mode: .text)
                 } catch { app.error = error.localizedDescription }
             } } label: { Label("New file", systemImage: "doc.badge.plus") }
-            Button { importFolder = false; importerShown = true } label: { Label("Import files…", systemImage: "square.and.arrow.down") }
+            Button { app.importFiles(into: pane) } label: { Label("Import files (copy)…", systemImage: "square.and.arrow.down") }
+            Button { app.openInPlace(places: places, pane: pane) } label: { Label("Open files in place…", systemImage: "doc.viewfinder") }
+            Button { app.openFolder(places: places, pane: pane) } label: { Label("Open a folder from Files…", systemImage: "folder.badge.person.crop") }
             Divider()
             Button { pane.selecting.toggle(); if !pane.selecting { pane.selection.removeAll() } } label: {
                 Label(pane.selecting ? "Done selecting" : "Select", systemImage: "checkmark.circle")
@@ -426,19 +411,6 @@ struct PaneView: View {
         prompt = NamePrompt(title: title, message: message, initial: initial, confirm: confirm, action: action)
     }
 
-    private func importFiles(_ urls: [URL]) {
-        let dir = pane.dir
-        app.run("Importing \(urls.count) file(s)…") {
-            var n = 0
-            for u in urls {
-                let ok = u.startAccessingSecurityScopedResource()
-                defer { if ok { u.stopAccessingSecurityScopedResource() } }
-                try FileManager.default.copyItem(at: u, to: FileOps.uniqueURL(u.lastPathComponent, in: dir))
-                n += 1
-            }
-            return "Imported \(n) file(s)"
-        }
-    }
 }
 
 struct FileRow: View {

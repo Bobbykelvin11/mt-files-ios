@@ -114,6 +114,7 @@ final class AppModel: ObservableObject {
     @Published var open: OpenRequest?
     @Published var assistantContext: AIContext?
     @Published var tab = 0
+    @Published var pick: PickRequest?
 
     init() {
         let docs = LocationStore.documents
@@ -192,7 +193,7 @@ final class AppModel: ObservableObject {
         }
         do {
             let dest = FileOps.uniqueURL(url.lastPathComponent, in: inbox)
-            try FileManager.default.copyItem(at: url, to: dest)
+            try FilePicking.coordinatedCopy(url, to: dest)
             tab = 0
             active = 0
             left.go(inbox)
@@ -221,6 +222,99 @@ extension AppModel {
             p.go(url.deletingLastPathComponent())
             p.selecting = true
             p.selection = [url]
+        }
+    }
+}
+
+// MARK: Picking from the Files app
+
+extension AppModel {
+    /// Import (copy) any files or packages into the pane's folder.
+    func importFiles(into pane: PaneModel) {
+        pick = PickRequest(mode: .importCopy) { [weak self] urls in
+            self?.copyPicked(urls, into: pane.dir)
+        }
+    }
+
+    func copyPicked(_ urls: [URL], into dir: URL) {
+        guard !urls.isEmpty else { return }
+        run("Importing \(urls.count) item(s)…") {
+            var failures: [String] = []
+            for u in urls {
+                do { try FilePicking.coordinatedCopy(u, to: FileOps.uniqueURL(u.lastPathComponent, in: dir)) }
+                catch { failures.append(error.localizedDescription) }
+            }
+            if !failures.isEmpty { throw PlainError(failures.joined(separator: "\n")) }
+            return "Imported \(urls.count) item(s) into \(dir.lastPathComponent)"
+        }
+    }
+
+    /// Open files (or folders) where they are, without copying. Access is remembered via bookmarks.
+    func openInPlace(places: LocationStore, pane: PaneModel) {
+        pick = PickRequest(mode: .openInPlace) { [weak self] urls in
+            guard let self else { return }
+            var firstFile: URL?
+            for u in urls {
+                _ = u.startAccessingSecurityScopedResource() // kept open for this session
+                var isDir: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir) else {
+                    self.error = "“\(u.lastPathComponent)” isn't available. If it's in iCloud, download it in the Files app first, or use Import (copy)."
+                    continue
+                }
+                if isDir.boolValue {
+                    do { let p = try places.addExternalFolder(u); pane.go(p.url) } catch { self.error = error.localizedDescription }
+                } else {
+                    places.addOpenedFile(u)
+                    if firstFile == nil { firstFile = u }
+                }
+            }
+            if urls.count > 1 { self.show("Opened \(urls.count) items in place — they're in ⭐ Favorites") }
+            if let f = firstFile { self.open = OpenRequest(url: f) }
+        }
+    }
+
+    /// Pick a folder from the Files app and keep access to it.
+    func openFolder(places: LocationStore, pane: PaneModel) {
+        pick = PickRequest(mode: .folder) { [weak self] urls in
+            for u in urls {
+                do {
+                    let p = try places.addExternalFolder(u)
+                    pane.go(p.url)
+                    self?.show("Added “\(p.name)” to Locations")
+                } catch {
+                    self?.error = "Couldn't open that folder: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// Downloads a file from a link into the active pane.
+    func download(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else {
+            error = "That isn't a valid http(s) link."
+            return
+        }
+        let dir = activePane.dir
+        busy = "Downloading \(url.lastPathComponent.isEmpty ? "file" : url.lastPathComponent)…"
+        Task {
+            do {
+                let (tmp, resp) = try await URLSession.shared.download(from: url)
+                if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                    throw PlainError("Server returned HTTP \(http.statusCode)")
+                }
+                var name = resp.suggestedFilename ?? url.lastPathComponent
+                if name.isEmpty { name = "download" }
+                let dest = FileOps.uniqueURL(name, in: dir)
+                try FileManager.default.moveItem(at: tmp, to: dest)
+                busy = nil
+                reloadAll()
+                show("Downloaded \(dest.lastPathComponent)")
+                open = OpenRequest(url: dest)
+            } catch {
+                busy = nil
+                self.error = "Download failed: \(error.localizedDescription)"
+            }
         }
     }
 }

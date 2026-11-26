@@ -76,14 +76,15 @@ final class LibraryStore: ObservableObject {
 
     @discardableResult
     func importIPA(from url: URL, suggestedName: String? = nil) async throws -> IPAProject {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-
         let id = UUID()
         let name = suggestedName ?? url.lastPathComponent
         let temp = fm.temporaryDirectory.appendingPathComponent("import-\(id.uuidString).ipa")
         try? fm.removeItem(at: temp)
-        try fm.copyItem(at: url, to: temp)
+        try FilePicking.coordinatedCopy(url, to: temp)
+        guard FilePicking.isZip(temp) else {
+            try? fm.removeItem(at: temp)
+            throw StudioError.message("“\(name)” isn't an IPA (an .ipa is a zip archive with a Payload folder). Pick an .ipa file.")
+        }
         let dir = projectsRoot.appendingPathComponent(id.uuidString, isDirectory: true)
 
         busyMessage = "Unpacking \(name)…"

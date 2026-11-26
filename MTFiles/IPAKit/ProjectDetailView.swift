@@ -17,7 +17,7 @@ struct ProjectDetailView: View {
     @State private var bundleSize: Int64?
 
     @State private var photoItem: PhotosPickerItem?
-    @State private var showIconFileImporter = false
+    @State private var pick: PickRequest?
     @State private var exportedURL: URL?
     @State private var share: IdentifiableURL?
     @State private var saveToFiles: IdentifiableURL?
@@ -51,17 +51,7 @@ struct ProjectDetailView: View {
                 photoItem = nil
             }
         }
-        .fileImporter(isPresented: $showIconFileImporter, allowedContentTypes: [.image], allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                if let data = try? Data(contentsOf: url), let img = UIImage(data: data) {
-                    replaceIcon(img)
-                } else {
-                    store.lastError = "Couldn't read that image."
-                }
-            }
-        }
+        .documentPicker($pick)
         .sheet(item: $share) { item in ShareSheet(items: [item.url]) }
         .sheet(item: $saveToFiles) { item in ExportToFilesPicker(url: item.url) }
         .overlay(alignment: .bottom) {
@@ -133,7 +123,18 @@ struct ProjectDetailView: View {
                 PhotosPicker(selection: $photoItem, matching: .images) {
                     Label("Replace icon from Photos", systemImage: "photo")
                 }
-                Button { showIconFileImporter = true } label: {
+                Button {
+                    pick = PickRequest(mode: .importCopy, multiple: false) { urls in
+                        guard let url = urls.first else { return }
+                        let scoped = url.startAccessingSecurityScopedResource()
+                        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                        if let data = try? Data(contentsOf: url), let img = UIImage(data: data) {
+                            replaceIcon(img)
+                        } else {
+                            store.lastError = "“\(url.lastPathComponent)” isn't an image MT Files can read (use PNG, JPEG or HEIC)."
+                        }
+                    }
+                } label: {
                     Label("Replace icon from Files", systemImage: "folder")
                 }
                 Menu {
