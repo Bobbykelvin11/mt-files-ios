@@ -13,7 +13,7 @@ struct FileDetailView: View {
     @State private var hexPreview = ""
     @State private var editable = false
     @State private var size: Int64 = 0
-    @State private var showReplace = false
+    @State private var pick: PickRequest?
     @State private var confirmDelete = false
     @State private var share: IdentifiableURL?
     @State private var message: String?
@@ -57,7 +57,7 @@ struct FileDetailView: View {
                     Button("Save", action: save)
                 }
                 Menu {
-                    Button { showReplace = true } label: { Label("Replace with file…", systemImage: "arrow.triangle.2.circlepath") }
+                    Button { pickReplacement() } label: { Label("Replace with file…", systemImage: "arrow.triangle.2.circlepath") }
                     Button { share = IdentifiableURL(url: url) } label: { Label("Share / Export", systemImage: "square.and.arrow.up") }
                     Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
                 } label: {
@@ -67,20 +67,7 @@ struct FileDetailView: View {
         }
         .onAppear(perform: load)
         .sheet(item: $share) { item in ShareSheet(items: [item.url]) }
-        .fileImporter(isPresented: $showReplace, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
-            guard case .success(let urls) = result, let src = urls.first else { return }
-            let scoped = src.startAccessingSecurityScopedResource()
-            defer { if scoped { src.stopAccessingSecurityScopedResource() } }
-            do {
-                let data = try Data(contentsOf: src)
-                try data.write(to: url, options: .atomic)
-                load()
-                onChange()
-                message = "Replaced"
-            } catch {
-                message = error.localizedDescription
-            }
-        }
+        .documentPicker($pick)
         .confirmationDialog("Delete this file?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 try? FileManager.default.removeItem(at: url)
@@ -90,6 +77,20 @@ struct FileDetailView: View {
         }
         .alert(message ?? "", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("OK", role: .cancel) {}
+        }
+    }
+
+    private func pickReplacement() {
+        pick = PickRequest(mode: .importCopy, multiple: false) { urls in
+            guard let src = urls.first else { return }
+            do {
+                try FilePicking.coordinatedCopy(src, to: url)
+                load()
+                onChange()
+                message = "Replaced with \(src.lastPathComponent)"
+            } catch {
+                message = error.localizedDescription
+            }
         }
     }
 

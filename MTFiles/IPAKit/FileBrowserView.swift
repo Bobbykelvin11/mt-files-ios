@@ -14,7 +14,7 @@ struct FileBrowserView: View {
     var onChange: () -> Void = {}
 
     @State private var items: [FileItem] = []
-    @State private var showAddFiles = false
+    @State private var pick: PickRequest?
     @State private var showNewFolder = false
     @State private var newFolderName = ""
     @State private var confirmDelete: FileItem?
@@ -58,7 +58,8 @@ struct FileBrowserView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
-                    Button { showAddFiles = true } label: { Label("Add files", systemImage: "doc.badge.plus") }
+                    Button { addFiles() } label: { Label("Add files…", systemImage: "doc.badge.plus") }
+                    Button { addFolder() } label: { Label("Add a folder…", systemImage: "folder.badge.plus") }
                     Button { showNewFolder = true } label: { Label("New folder", systemImage: "folder.badge.plus") }
                 } label: {
                     Image(systemName: "plus")
@@ -66,26 +67,7 @@ struct FileBrowserView: View {
             }
         }
         .onAppear(perform: reload)
-        .fileImporter(isPresented: $showAddFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-            switch result {
-            case .success(let urls):
-                for url in urls {
-                    let scoped = url.startAccessingSecurityScopedResource()
-                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                    let dest = directory.appendingPathComponent(url.lastPathComponent)
-                    do {
-                        if FileManager.default.fileExists(atPath: dest.path) { try FileManager.default.removeItem(at: dest) }
-                        try FileManager.default.copyItem(at: url, to: dest)
-                    } catch {
-                        self.error = error.localizedDescription
-                    }
-                }
-                reload()
-                onChange()
-            case .failure(let err):
-                error = err.localizedDescription
-            }
-        }
+        .documentPicker($pick)
         .alert("New folder", isPresented: $showNewFolder) {
             TextField("Name", text: $newFolderName)
             Button("Create") {
@@ -118,6 +100,28 @@ struct FileBrowserView: View {
         } message: {
             Text(error ?? "")
         }
+    }
+
+    private func copyIn(_ urls: [URL]) {
+        var failures: [String] = []
+        for url in urls {
+            do {
+                try FilePicking.coordinatedCopy(url, to: directory.appendingPathComponent(url.lastPathComponent))
+            } catch {
+                failures.append(error.localizedDescription)
+            }
+        }
+        reload()
+        onChange()
+        if !failures.isEmpty { error = failures.joined(separator: "\n") }
+    }
+
+    private func addFiles() {
+        pick = PickRequest(mode: .importCopy) { urls in copyIn(urls) }
+    }
+
+    private func addFolder() {
+        pick = PickRequest(mode: .folder) { urls in copyIn(urls) }
     }
 
     private func reload() {

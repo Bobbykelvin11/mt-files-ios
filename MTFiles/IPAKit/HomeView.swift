@@ -11,7 +11,7 @@ struct HomeView: View {
     @Binding var selectedTab: Int
     @State private var query = ""
     @State private var ask: AskRequest?
-    @State private var showFileImporter = false
+    @State private var pick: PickRequest?
     @State private var showURLImport = false
     @State private var path = NavigationPath()
     @FocusState private var askFocused: Bool
@@ -72,20 +72,19 @@ struct HomeView: View {
             .navigationDestination(for: IPAProject.self) { p in
                 ProjectDetailView(projectID: p.id)
             }
-            .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.ipa, .zip, .data], allowsMultipleSelection: false) { result in
-                switch result {
-                case .success(let urls):
-                    guard let url = urls.first else { return }
-                    Task {
-                        do {
-                            let p = try await store.importIPA(from: url)
-                            path.append(p)
-                        } catch {
-                            store.lastError = error.localizedDescription
-                        }
+            .documentPicker($pick)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button { pickIPAs(.importCopy) } label: { Label("Import IPA files…", systemImage: "square.and.arrow.down") }
+                        Button { pickIPAs(.openInPlace) } label: { Label("Open IPA in place…", systemImage: "doc.viewfinder") }
+                        Button { pickIPAs(.folder) } label: { Label("Open a folder of IPAs…", systemImage: "folder") }
+                        Button { showURLImport = true } label: { Label("From URL…", systemImage: "link") }
+                        Button { query = "find "; askFocused = true } label: { Label("Find on GitHub", systemImage: "magnifyingglass") }
+                    } label: {
+                        Image(systemName: "plus.circle.fill").font(.title3)
                     }
-                case .failure(let error):
-                    store.lastError = error.localizedDescription
+                    .accessibilityLabel("Import")
                 }
             }
             .sheet(isPresented: $showURLImport) {
@@ -138,7 +137,7 @@ struct HomeView: View {
 
     private var importButtons: some View {
         HStack(spacing: 12) {
-            BigButton(title: "From Files", symbol: "folder.fill", color: .blue) { showFileImporter = true }
+            BigButton(title: "From Files", symbol: "folder.fill", color: .blue) { pickIPAs(.importCopy) }
             BigButton(title: "From URL", symbol: "link", color: .purple) { showURLImport = true }
             BigButton(title: "Find on GitHub", symbol: "magnifyingglass", color: .pink) {
                 query = "find "
@@ -156,6 +155,43 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 30)
+    }
+
+    /// Pick IPAs: anything is selectable; files are validated after picking.
+    private func pickIPAs(_ mode: PickMode) {
+        pick = PickRequest(mode: mode, multiple: mode != .folder) { urls in
+            Task { await importPicked(urls, folder: mode == .folder) }
+        }
+    }
+
+    private func importPicked(_ urls: [URL], folder: Bool) async {
+        var candidates: [URL] = []
+        var scopedFolders: [URL] = []
+        for u in urls {
+            var isDir: ObjCBool = false
+            let scoped = u.startAccessingSecurityScopedResource()
+            if FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue {
+                if scoped { scopedFolders.append(u) }
+                let found = FilePicking.ipaFiles(in: u)
+                if found.isEmpty { store.lastError = "No .ipa files found in “\(u.lastPathComponent)”." }
+                candidates += found
+            } else {
+                if scoped { u.stopAccessingSecurityScopedResource() }
+                candidates.append(u)
+            }
+        }
+        defer { for f in scopedFolders { f.stopAccessingSecurityScopedResource() } }
+        var errors: [String] = []
+        var last: IPAProject?
+        for u in candidates {
+            guard FilePicking.looksLikeIPA(u) else {
+                errors.append("“\(u.lastPathComponent)” isn't an IPA file.")
+                continue
+            }
+            do { last = try await store.importIPA(from: u) } catch { errors.append(error.localizedDescription) }
+        }
+        if let last { path.append(last) }
+        if !errors.isEmpty { store.lastError = errors.joined(separator: "\n") }
     }
 
     private func submit() {
