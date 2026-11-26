@@ -3,13 +3,15 @@ import Foundation
 enum SafetyGuard {
     static let refusal = "I can't help with that. MT Files never cracks apps, unlocks subscriptions or in-app purchases, bypasses licenses or DRM, or decrypts App Store apps. If you want a paid feature for free, I can help you find an open-source alternative instead (try the IPA tab → “find …”)."
 
+    // Narrow on purpose: only cracking / purchase-unlock / license-bypass / app-decryption requests are blocked.
     private static let patterns: [NSRegularExpression] = [
-        "\\bcrack(ed|ing|s)?\\b", "\\bkeygen\\b", "\\bserial (key|number)s? (gen|generator|for)\\b", "\\bwarez\\b", "\\bpirat",
-        "(unlock|bypass|remove|skip|disable|hack|patch|free)\\W+(the\\W+)?(premium|pro|vip|subscription|paywall|in.?app.?purchase|iap|license|licen[cs]e check|activation|trial)",
-        "(premium|pro|vip|subscription|paywall|license|iap|in.?app.?purchase)\\W+(unlock|bypass|crack|hack|patch|free|removal)",
-        "\\biap\\b.*(hack|unlock|free|bypass)", "\\bmod(ded)? (apk|ipa)\\b",
-        "decrypt\\W+(the\\W+)?(app|ipa|binary|app ?store)", "fairplay", "\\bdrm\\b.*(remove|strip|bypass)", "(remove|strip|bypass)\\W+drm",
-        "(get|make)\\W+.*\\bfor free\\b.*\\b(premium|pro|paid)\\b", "\\bjailbreak detection\\b.*bypass", "\\bfake (receipt|purchase)"
+        "\\bcrack(ed|ing|s)?\\W+(the\\W+|this\\W+|an?\\W+)?(app|apk|ipa|software|game|program|license|serial|premium|pro version|subscription)",
+        "\\b(app|apk|ipa|software|game)\\W+crack", "\\bkeygen\\b", "\\bwarez\\b",
+        "\\bpirat(ed|e|ing)\\W+(app|apk|ipa|software|game)",
+        "(unlock|bypass|remove|skip|disable|hack|patch)\\W+(the\\W+)?(premium|pro|vip|subscription|paywall|in.?app.?purchase|iap|licen[cs]e|activation|trial)\\b",
+        "\\b(premium|vip|subscription|paywall|licen[cs]e|iap|in.?app.?purchase)\\W+(unlock|bypass|crack|hack|patch)",
+        "\\bmod(ded)? (apk|ipa)\\b",
+        "decrypt\\W+(the\\W+|this\\W+|an?\\W+)?(app|ipa|binary|app ?store)", "\\bfairplay\\b", "(remove|strip|bypass)\\W+(the\\W+)?drm", "\\bfake (receipt|purchase)"
     ].compactMap { try? NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
 
     static func isBlocked(_ text: String) -> Bool {

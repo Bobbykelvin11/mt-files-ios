@@ -17,7 +17,9 @@ enum AIConfig {
     static var baseURL: String { UserDefaults.standard.string(forKey: "ai_base_url") ?? "https://api.groq.com/openai/v1" }
     static var model: String { UserDefaults.standard.string(forKey: "ai_model") ?? "llama-3.3-70b-versatile" }
     static var apiKey: String { Keychain.get("ai_api_key") }
-    static var isConfigured: Bool { !apiKey.isEmpty && URL(string: baseURL) != nil }
+    /// Local servers (LM Studio, Ollama, llama.cpp) usually need no key.
+    static var noKeyNeeded: Bool { UserDefaults.standard.bool(forKey: "ai_no_key") }
+    static var isConfigured: Bool { (!apiKey.isEmpty || noKeyNeeded) && URL(string: baseURL) != nil }
 }
 
 enum AIClient {
@@ -56,7 +58,7 @@ enum AIClient {
         req.httpMethod = "POST"
         req.timeoutInterval = 120
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(AIConfig.apiKey)", forHTTPHeaderField: "Authorization")
+        if !AIConfig.apiKey.isEmpty { req.setValue("Bearer \(AIConfig.apiKey)", forHTTPHeaderField: "Authorization") }
         req.setValue("https://github.com/Bobbykelvin11/mt-files-ios", forHTTPHeaderField: "HTTP-Referer")
         req.setValue("MT Files", forHTTPHeaderField: "X-Title")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -73,6 +75,24 @@ enum AIClient {
             throw StudioError.message("Unexpected AI response")
         }
         return content
+    }
+
+    /// Lists model IDs from an OpenAI-compatible /models endpoint.
+    static func listModels() async throws -> [String] {
+        var base = AIConfig.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        while base.hasSuffix("/") { base.removeLast() }
+        if base.hasSuffix("/chat/completions") { base = String(base.dropLast("/chat/completions".count)) }
+        guard let url = URL(string: base + "/models") else { throw StudioError.message("Invalid base URL") }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 30
+        if !AIConfig.apiKey.isEmpty { req.setValue("Bearer \(AIConfig.apiKey)", forHTTPHeaderField: "Authorization") }
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw StudioError.message("Models request failed: HTTP \(http.statusCode)")
+        }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let list = (json?["data"] as? [[String: Any]]) ?? (json?["models"] as? [[String: Any]]) ?? []
+        return list.compactMap { ($0["id"] as? String) ?? ($0["name"] as? String) }.sorted()
     }
 
     /// Splits an AI reply into visible text + optional action.

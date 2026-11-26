@@ -194,7 +194,7 @@ struct AssistantView: View {
     private var intro: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Ask about your files, or tell me what to do.", systemImage: "sparkles").font(.headline)
-            Text("Every file change is shown first and runs only when you tap Run or Apply. \(AIConfig.isConfigured ? "" : "No AI key yet: I'll use the offline command parser. Add a free key in Settings for explanations and code edits.")")
+            Text("I propose a plan first; tap Confirm (or type “go on”) and I run every step with live progress. \(AIConfig.isConfigured ? "" : "No AI key yet: I'll use the offline command parser. Add a free key in Settings for explanations and code edits.")")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .padding()
@@ -272,8 +272,7 @@ struct AssistantView: View {
                 if !item.text.isEmpty {
                     Text(markdown(item.text)).font(.callout).textSelection(.enabled)
                 }
-                if let c = item.command { commandCard(item, c) }
-                if let e = item.edit { editCard(item, e) }
+                if !item.steps.isEmpty { planCard(item) }
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -285,55 +284,83 @@ struct AssistantView: View {
         (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
     }
 
-    private func commandCard(_ item: AIItem, _ c: FileCommand) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(c.title, systemImage: c.symbol).font(.subheadline.bold())
-                .foregroundStyle(c.destructive ? .red : .primary)
-            if let d = c.detail { Text(d).font(.caption.monospaced()).foregroundStyle(.secondary) }
-            stateRow(item, runLabel: c.destructive ? "Delete" : "Run", destructive: c.destructive) { model.run(item.id) }
-            foundList(item)
-        }
-        .padding(10)
-        .background(Theme.row, in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func editCard(_ item: AIItem, _ e: ProposedEdit) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            DiffView(edit: e)
-            stateRow(item, runLabel: { if case .newFile = e.target { return "Create file" } else { return "Apply" } }(), destructive: false) { model.apply(item.id) }
-            foundList(item)
-        }
-        .padding(10)
-        .background(Theme.row, in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    @ViewBuilder
-    private func stateRow(_ item: AIItem, runLabel: String, destructive: Bool, run: @escaping () -> Void) -> some View {
-        switch item.state {
-        case .pending:
+    private func planCard(_ item: AIItem) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Button(role: destructive ? .destructive : nil, action: run) { Text(runLabel).bold() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(destructive ? Color.red : Theme.accent)
-                Button("Cancel") { model.cancel(item.id) }.buttonStyle(.bordered)
+                Label("Plan · \(item.steps.count) step\(item.steps.count == 1 ? "" : "s")", systemImage: "list.number").font(.subheadline.bold())
+                Spacer()
+                if item.planState == .running {
+                    let done = item.steps.filter { $0.state == .done || $0.state == .cancelled }.count
+                    Text("\(done)/\(item.steps.count)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                }
             }
-        case .running:
-            HStack { ProgressView(); Text("Working…").font(.caption) }
-        case .done, .cancelled:
-            if let r = item.resultText {
-                Label(r, systemImage: item.state == .done ? "checkmark.circle.fill" : "xmark.circle")
+            if item.planState == .running {
+                let done = item.steps.filter { $0.state == .done || $0.state == .cancelled }.count
+                ProgressView(value: Double(done), total: Double(max(item.steps.count, 1))).tint(Theme.accent)
+            }
+            ForEach(Array(item.steps.enumerated()), id: \.element.id) { n, step in
+                stepRow(n + 1, step)
+            }
+            switch item.planState {
+            case .pending:
+                if item.steps.contains(where: { $0.destructive }) {
+                    Label("This plan deletes files.", systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
+                }
+                HStack {
+                    Button { model.confirm(item.id) } label: { Text("Confirm & run all").bold() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(item.steps.contains(where: { $0.destructive }) ? Color.red : Theme.accent)
+                    Button("Cancel") { model.cancel(item.id) }.buttonStyle(.bordered)
+                }
+                Text("…or type “go on”.").font(.caption2).foregroundStyle(.secondary)
+            case .running:
+                HStack { ProgressView(); Text("Running the plan…").font(.caption) }
+            case .done:
+                Label("Plan finished", systemImage: "checkmark.seal.fill").font(.caption).foregroundStyle(.green)
+            case .cancelled:
+                Label("Cancelled", systemImage: "xmark.circle").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(Theme.row, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private func stepRow(_ n: Int, _ step: PlanStep) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                Group {
+                    switch step.state {
+                    case .pending: Image(systemName: "\(min(n, 50)).circle").foregroundStyle(.secondary)
+                    case .running: ProgressView().controlSize(.small)
+                    case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    case .cancelled: Image(systemName: step.result?.hasPrefix("Failed") == true ? "exclamationmark.circle.fill" : "minus.circle").foregroundStyle(step.result?.hasPrefix("Failed") == true ? Color.red : Color.secondary)
+                    }
+                }
+                .frame(width: 20)
+                VStack(alignment: .leading, spacing: 3) {
+                    Label(step.title, systemImage: step.symbol)
+                        .font(.footnote.bold())
+                        .foregroundStyle(step.destructive ? Color.red : Color.primary)
+                    if let d = step.command?.detail { Text(d).font(.caption2.monospaced()).foregroundStyle(.secondary) }
+                    if let r = step.result {
+                        Text(r).font(.caption).foregroundStyle(step.state == .done ? Color.green : Color.secondary).textSelection(.enabled)
+                    }
+                }
+            }
+            if let e = step.edit {
+                DisclosureGroup("Show changes") { DiffView(edit: e) }
                     .font(.caption)
-                    .foregroundStyle(item.state == .done ? .green : .secondary)
-                    .textSelection(.enabled)
             }
+            foundList(step.found)
         }
     }
 
     @ViewBuilder
-    private func foundList(_ item: AIItem) -> some View {
-        if !item.found.isEmpty {
+    private func foundList(_ found: [URL]) -> some View {
+        if !found.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(item.found.prefix(60), id: \.self) { u in
+                ForEach(found.prefix(60), id: \.self) { u in
                     Button { reveal(u) } label: {
                         let e = FileEntry(url: u)
                         HStack(spacing: 6) {
@@ -342,7 +369,7 @@ struct AssistantView: View {
                         }
                     }
                 }
-                if item.found.count > 60 { Text("…and \(item.found.count - 60) more").font(.caption2).foregroundStyle(.secondary) }
+                if found.count > 60 { Text("…and \(found.count - 60) more").font(.caption2).foregroundStyle(.secondary) }
             }
         }
     }
